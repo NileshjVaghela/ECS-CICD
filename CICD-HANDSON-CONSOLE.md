@@ -211,7 +211,7 @@ You should see `2  2` (2 running, 2 desired).
 - **Runtime(s):** Standard
 - **Image:** `aws/codebuild/standard:7.0` (or latest)
 - **Image version:** Always use the latest
-- **Privileged:** ✅ **Enable** (required for Docker builds)
+- **Privileged:** ✅ **MUST Enable** (required for Docker builds - very important!)
 - **Service role:** Existing service role
 - **Role ARN:** Select `ecs-codebuild-role`
 
@@ -220,10 +220,16 @@ Add these variables (click **Add environment variable** for each):
 
 | Name | Value | Type |
 |------|-------|------|
-| `AWS_ACCOUNT_ID` | Your AWS Account ID | Plaintext |
+| `AWS_ACCOUNT_ID` | Your AWS Account ID (e.g., 858581942966) | Plaintext |
 | `AWS_DEFAULT_REGION` | Your region (e.g., us-east-1) | Plaintext |
-| `IMAGE_REPO_NAME` | Value from CloudFormation Outputs | Plaintext |
+| `IMAGE_REPO_NAME` | `ecs-staging-app` (from CloudFormation Outputs) | Plaintext |
 | `IMAGE_TAG` | `latest` | Plaintext |
+
+**Important:** Make sure all 4 environment variables are added correctly!
+
+**To find your AWS Account ID:**
+- Click on your username in top-right corner of AWS Console
+- Your Account ID is shown in the dropdown
 
 ### Buildspec
 - **Build specifications:** Insert build commands
@@ -454,9 +460,13 @@ aws cloudformation delete-stack --stack-name ecs-staging --region us-east-1
 
 ### Pipeline Fails at Build Stage
 - **Check:** CodeBuild logs (click Details in Build stage)
-- **Verify:** Privileged mode is enabled in CodeBuild
-- **Verify:** IAM role has ECR permissions
-- **Check:** Environment variables are set correctly
+- **Verify:** Privileged mode is enabled in CodeBuild (MUST be checked!)
+- **Verify:** IAM role has ECR permissions (attach `AmazonEC2ContainerRegistryPowerUser` policy)
+- **Check:** All 4 environment variables are set correctly in CodeBuild:
+  - `AWS_ACCOUNT_ID`
+  - `AWS_DEFAULT_REGION`
+  - `IMAGE_REPO_NAME`
+  - `IMAGE_TAG`
 
 ### Pipeline Fails at Deploy Stage
 - **Verify:** ECS cluster and service names match CloudFormation outputs
