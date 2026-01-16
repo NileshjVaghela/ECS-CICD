@@ -12,21 +12,113 @@ In this hands-on exercise, you will create a complete CI/CD pipeline for ECS usi
 ---
 
 ## Prerequisites (Already Deployed)
-The instructor has deployed the `ecs-base` CloudFormation stack with:
+The instructor has deployed the `ecs-staging` CloudFormation stack with:
 - VPC and Subnets
 - Application Load Balancer
-- ECS Fargate Cluster and Service
+- ECS Fargate Cluster and Service (tagged as **staging**)
 - ECR Repository
+
+**Deployment command used by instructor:**
+```bash
+aws cloudformation create-stack \
+  --stack-name ecs-staging \
+  --template-body file://ecs-base-infrastructure.yaml \
+  --parameters ParameterKey=Environment,ParameterValue=staging \
+  --capabilities CAPABILITY_NAMED_IAM \
+  --region us-east-1
+```
 
 ### Get Base Stack Information
 1. Go to **CloudFormation** console
-2. Click on stack `ecs-base`
+2. Click on stack `ecs-staging`
 3. Click **Outputs** tab
 4. **Note down these values** (you'll need them):
-   - `ECSClusterName` (e.g., `ecs-base-cluster`)
-   - `ECSServiceName` (e.g., `ecs-base-service`)
-   - `ECRRepositoryName` (e.g., `ecs-base-app`)
-   - `LoadBalancerUrl` (e.g., `http://ecs-base-alb-xxx.us-east-1.elb.amazonaws.com`)
+   - `Environment` → `staging`
+   - `ECSClusterName` (e.g., `ecs-staging-cluster`)
+   - `ECSServiceName` (e.g., `ecs-staging-service`)
+   - `ECRRepositoryName` (e.g., `ecs-staging-app`)
+   - `ECRRepositoryUri` (e.g., `123456789.dkr.ecr.us-east-1.amazonaws.com/ecs-staging-app`)
+   - `LoadBalancerUrl` (e.g., `http://ecs-staging-alb-xxx.us-east-1.elb.amazonaws.com`)
+
+---
+
+## Part 0: Push Initial Image to ECR (Required First Step)
+
+**Important:** The base CloudFormation stack creates an ECS service with a placeholder nginx image. You need to push your application image to ECR and update the service.
+
+### Using CloudShell or Local Terminal
+
+```bash
+# Set variables (replace with your values from CloudFormation outputs)
+export AWS_ACCOUNT_ID=<YOUR-ACCOUNT-ID>
+export AWS_REGION=us-east-1
+export ECR_REPO_NAME=ecs-staging-app  # Use the ECRRepositoryName from CloudFormation outputs
+
+# Create a simple Dockerfile
+cat > /tmp/Dockerfile << 'EOF'
+FROM nginx:alpine
+RUN echo '<html><body><h1>ECS Demo App</h1><p>Initial Version</p></body></html>' > /usr/share/nginx/html/index.html
+EXPOSE 80
+EOF
+
+# Login to ECR
+aws ecr get-login-password --region $AWS_REGION | docker login --username AWS --password-stdin $AWS_ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com
+
+# Build the image
+cd /tmp
+docker build -t $ECR_REPO_NAME:latest .
+
+# Tag the image
+docker tag $ECR_REPO_NAME:latest $AWS_ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com/$ECR_REPO_NAME:latest
+
+# Push to ECR
+docker push $AWS_ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com/$ECR_REPO_NAME:latest
+```
+
+### Update Task Definition to Use ECR Image
+
+Create a new task definition revision that uses your ECR image:
+
+```bash
+# Get the current task definition
+aws ecs describe-task-definition \
+  --task-definition ecs-staging-task \
+  --region us-east-1 \
+  --query 'taskDefinition' > /tmp/task-def.json
+
+# Update the image in the task definition
+cat /tmp/task-def.json | jq --arg IMAGE "$AWS_ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com/$ECR_REPO_NAME:latest" \
+  '.containerDefinitions[0].image = $IMAGE | del(.taskDefinitionArn, .revision, .status, .requiresAttributes, .compatibilities, .registeredAt, .registeredBy)' \
+  > /tmp/new-task-def.json
+
+# Register the new task definition
+aws ecs register-task-definition \
+  --cli-input-json file:///tmp/new-task-def.json \
+  --region us-east-1
+```
+
+### Update ECS Service to Use New Task Definition
+
+```bash
+aws ecs update-service \
+  --cluster ecs-staging-cluster \
+  --service ecs-staging-service \
+  --force-new-deployment \
+  --region us-east-1
+```
+
+**Wait 2-3 minutes** for tasks to start running. Verify:
+
+```bash
+aws ecs describe-services \
+  --cluster ecs-staging-cluster \
+  --services ecs-staging-service \
+  --region us-east-1 \
+  --query 'services[0].[runningCount,desiredCount]' \
+  --output text
+```
+
+You should see `2  2` (2 running, 2 desired).
 
 ---
 
@@ -267,8 +359,8 @@ Click **Create build project**
 ### Deploy Stage
 - **Deploy provider:** Amazon ECS
 - **Region:** Your region
-- **Cluster name:** Enter the value from CloudFormation Outputs (e.g., `ecs-base-cluster`)
-- **Service name:** Enter the value from CloudFormation Outputs (e.g., `ecs-base-service`)
+- **Cluster name:** Enter the value from CloudFormation Outputs (e.g., `ecs-staging-cluster`)
+- **Service name:** Enter the value from CloudFormation Outputs (e.g., `ecs-staging-service`)
 - **Image definitions file:** `imagedefinitions.json`
 - Click **Next**
 
@@ -416,7 +508,7 @@ git push origin main
 
 ### Delete Base Infrastructure (Instructor)
 ```bash
-aws cloudformation delete-stack --stack-name ecs-base --region us-east-1
+aws cloudformation delete-stack --stack-name ecs-staging --region us-east-1
 ```
 
 ---

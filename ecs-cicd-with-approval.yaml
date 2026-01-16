@@ -1,0 +1,332 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'ECS CI/CD Pipeline with Staging and Production - Manual Approval'
+
+Parameters:
+  StagingStackName:
+    Type: String
+    Description: Name of the staging infrastructure stack
+    Default: ecs-staging
+  
+  ProductionStackName:
+    Type: String
+    Description: Name of the production infrastructure stack
+    Default: ecs-production
+  
+  RepositoryName:
+    Type: String
+    Description: CodeCommit repository name
+    Default: ecs-app
+  
+  BranchName:
+    Type: String
+    Description: CodeCommit branch name
+    Default: main
+  
+  ApprovalEmail:
+    Type: String
+    Description: Email address for manual approval notifications
+    Default: admin@example.com
+
+Resources:
+  # SNS Topic for Approval Notifications
+  ApprovalTopic:
+    Type: AWS::SNS::Topic
+    Properties:
+      TopicName: !Sub '${AWS::StackName}-approval'
+      Subscription:
+        - Endpoint: !Ref ApprovalEmail
+          Protocol: email
+
+  # CodeCommit Repository
+  CodeCommitRepository:
+    Type: AWS::CodeCommit::Repository
+    Properties:
+      RepositoryName: !Ref RepositoryName
+      RepositoryDescription: ECS application repository
+
+  # S3 Bucket for Pipeline Artifacts
+  ArtifactBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub '${AWS::StackName}-artifacts-${AWS::AccountId}'
+      VersioningConfiguration:
+        Status: Enabled
+
+  # CodeBuild Service Role
+  CodeBuildRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: codebuild.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/AmazonEC2ContainerRegistryPowerUser
+      Policies:
+        - PolicyName: CodeBuildPolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - logs:CreateLogGroup
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Resource: !Sub 'arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/codebuild/*'
+              - Effect: Allow
+                Action:
+                  - s3:GetObject
+                  - s3:PutObject
+                Resource: !Sub '${ArtifactBucket.Arn}/*'
+
+  # CodeBuild Project
+  CodeBuildProject:
+    Type: AWS::CodeBuild::Project
+    Properties:
+      Name: !Sub '${AWS::StackName}-build'
+      ServiceRole: !GetAtt CodeBuildRole.Arn
+      Artifacts:
+        Type: CODEPIPELINE
+      Environment:
+        Type: LINUX_CONTAINER
+        ComputeType: BUILD_GENERAL1_SMALL
+        Image: aws/codebuild/standard:5.0
+        PrivilegedMode: true
+        EnvironmentVariables:
+          - Name: AWS_ACCOUNT_ID
+            Value: !Ref AWS::AccountId
+          - Name: AWS_DEFAULT_REGION
+            Value: !Ref AWS::Region
+          - Name: IMAGE_REPO_NAME
+            Value: !ImportValue 
+              Fn::Sub: '${StagingStackName}-ECRRepo'
+          - Name: IMAGE_TAG
+            Value: latest
+      Source:
+        Type: CODEPIPELINE
+        BuildSpec: |
+          version: 0.2
+          phases:
+            pre_build:
+              commands:
+                - echo Logging in to Amazon ECR...
+                - aws ecr get-login-password --region $AWS_DEFAULT_REGION | docker login --username AWS --password-stdin $AWS_ACCOUNT_ID.dkr.ecr.$AWS_DEFAULT_REGION.amazonaws.com
+            build:
+              commands:
+                - echo Build started on `date`
+                - docker build -t $IMAGE_REPO_NAME:$IMAGE_TAG .
+                - docker tag $IMAGE_REPO_NAME:$IMAGE_TAG $AWS_ACCOUNT_ID.dkr.ecr.$AWS_DEFAULT_REGION.amazonaws.com/$IMAGE_REPO_NAME:$IMAGE_TAG
+            post_build:
+              commands:
+                - echo Pushing the Docker image...
+                - docker push $AWS_ACCOUNT_ID.dkr.ecr.$AWS_DEFAULT_REGION.amazonaws.com/$IMAGE_REPO_NAME:$IMAGE_TAG
+                - printf '[{"name":"app","imageUri":"%s"}]' $AWS_ACCOUNT_ID.dkr.ecr.$AWS_DEFAULT_REGION.amazonaws.com/$IMAGE_REPO_NAME:$IMAGE_TAG > imagedefinitions.json
+          artifacts:
+            files:
+              - imagedefinitions.json
+
+  # CodePipeline Service Role
+  CodePipelineRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: codepipeline.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: CodePipelinePolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - s3:GetObject
+                  - s3:PutObject
+                Resource: !Sub '${ArtifactBucket.Arn}/*'
+              - Effect: Allow
+                Action:
+                  - codebuild:BatchGetBuilds
+                  - codebuild:StartBuild
+                Resource: !GetAtt CodeBuildProject.Arn
+              - Effect: Allow
+                Action:
+                  - ecs:*
+                  - iam:PassRole
+                Resource: '*'
+              - Effect: Allow
+                Action:
+                  - codecommit:GetBranch
+                  - codecommit:GetCommit
+                  - codecommit:UploadArchive
+                  - codecommit:GetUploadArchiveStatus
+                  - codecommit:CancelUploadArchive
+                Resource: !GetAtt CodeCommitRepository.Arn
+              - Effect: Allow
+                Action:
+                  - sns:Publish
+                Resource: !Ref ApprovalTopic
+
+  # CodePipeline with Staging and Production
+  Pipeline:
+    Type: AWS::CodePipeline::Pipeline
+    Properties:
+      Name: !Sub '${AWS::StackName}-pipeline'
+      RoleArn: !GetAtt CodePipelineRole.Arn
+      ArtifactStore:
+        Type: S3
+        Location: !Ref ArtifactBucket
+      Stages:
+        - Name: Source
+          Actions:
+            - Name: SourceAction
+              ActionTypeId:
+                Category: Source
+                Owner: AWS
+                Provider: CodeCommit
+                Version: '1'
+              Configuration:
+                RepositoryName: !GetAtt CodeCommitRepository.Name
+                BranchName: !Ref BranchName
+                PollForSourceChanges: false
+              OutputArtifacts:
+                - Name: SourceOutput
+        
+        - Name: Build
+          Actions:
+            - Name: BuildAction
+              ActionTypeId:
+                Category: Build
+                Owner: AWS
+                Provider: CodeBuild
+                Version: '1'
+              Configuration:
+                ProjectName: !Ref CodeBuildProject
+              InputArtifacts:
+                - Name: SourceOutput
+              OutputArtifacts:
+                - Name: BuildOutput
+        
+        - Name: Deploy-Staging
+          Actions:
+            - Name: DeployToStaging
+              ActionTypeId:
+                Category: Deploy
+                Owner: AWS
+                Provider: ECS
+                Version: '1'
+              Configuration:
+                ClusterName: !ImportValue 
+                  Fn::Sub: '${StagingStackName}-ClusterName'
+                ServiceName: !ImportValue 
+                  Fn::Sub: '${StagingStackName}-ServiceName'
+                FileName: imagedefinitions.json
+              InputArtifacts:
+                - Name: BuildOutput
+        
+        - Name: Approval
+          Actions:
+            - Name: ManualApproval
+              ActionTypeId:
+                Category: Approval
+                Owner: AWS
+                Provider: Manual
+                Version: '1'
+              Configuration:
+                NotificationArn: !Ref ApprovalTopic
+                CustomData: !Sub |
+                  Please review the staging deployment and approve to deploy to production.
+                  Staging URL: http://${StagingStackName}-alb-xxx.${AWS::Region}.elb.amazonaws.com
+        
+        - Name: Deploy-Production
+          Actions:
+            - Name: DeployToProduction
+              ActionTypeId:
+                Category: Deploy
+                Owner: AWS
+                Provider: ECS
+                Version: '1'
+              Configuration:
+                ClusterName: !ImportValue 
+                  Fn::Sub: '${ProductionStackName}-ClusterName'
+                ServiceName: !ImportValue 
+                  Fn::Sub: '${ProductionStackName}-ServiceName'
+                FileName: imagedefinitions.json
+              InputArtifacts:
+                - Name: BuildOutput
+
+  # EventBridge Rule to trigger pipeline on CodeCommit changes
+  PipelineTriggerRule:
+    Type: AWS::Events::Rule
+    Properties:
+      Description: Trigger pipeline on CodeCommit changes
+      EventPattern:
+        source:
+          - aws.codecommit
+        detail-type:
+          - CodeCommit Repository State Change
+        detail:
+          event:
+            - referenceCreated
+            - referenceUpdated
+          referenceType:
+            - branch
+          referenceName:
+            - !Ref BranchName
+        resources:
+          - !GetAtt CodeCommitRepository.Arn
+      State: ENABLED
+      Targets:
+        - Arn: !Sub 'arn:aws:codepipeline:${AWS::Region}:${AWS::AccountId}:${Pipeline}'
+          RoleArn: !GetAtt PipelineTriggerRole.Arn
+          Id: CodePipelineTarget
+
+  # IAM Role for EventBridge to trigger pipeline
+  PipelineTriggerRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: events.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: TriggerPipelinePolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action: codepipeline:StartPipelineExecution
+                Resource: !Sub 'arn:aws:codepipeline:${AWS::Region}:${AWS::AccountId}:${Pipeline}'
+
+Outputs:
+  CodeCommitRepoUrl:
+    Description: CodeCommit Repository Clone URL (HTTPS)
+    Value: !GetAtt CodeCommitRepository.CloneUrlHttp
+  
+  CodeCommitRepoName:
+    Description: CodeCommit Repository Name
+    Value: !GetAtt CodeCommitRepository.Name
+  
+  PipelineUrl:
+    Description: CodePipeline URL
+    Value: !Sub 'https://console.aws.amazon.com/codesuite/codepipeline/pipelines/${Pipeline}/view'
+  
+  CodeBuildProjectName:
+    Description: CodeBuild Project Name
+    Value: !Ref CodeBuildProject
+  
+  ArtifactBucketName:
+    Description: S3 Artifact Bucket Name
+    Value: !Ref ArtifactBucket
+  
+  ApprovalTopicArn:
+    Description: SNS Topic for Approval Notifications
+    Value: !Ref ApprovalTopic

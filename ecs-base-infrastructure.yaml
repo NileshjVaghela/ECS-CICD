@@ -1,6 +1,15 @@
 AWSTemplateFormatVersion: '2010-09-09'
 Description: 'ECS Base Infrastructure - Pre-deployed for CI/CD Hands-on'
 
+Parameters:
+  Environment:
+    Type: String
+    Description: Environment name
+    Default: staging
+    AllowedValues:
+      - staging
+      - production
+
 Resources:
   # VPC
   VPC:
@@ -12,6 +21,8 @@ Resources:
       Tags:
         - Key: Name
           Value: !Sub '${AWS::StackName}-vpc'
+        - Key: Environment
+          Value: !Ref Environment
 
   # Public Subnets
   PublicSubnet1:
@@ -148,6 +159,9 @@ Resources:
     Type: AWS::ECS::Cluster
     Properties:
       ClusterName: !Sub '${AWS::StackName}-cluster'
+      Tags:
+        - Key: Environment
+          Value: !Ref Environment
 
   # ECS Task Execution Role
   ECSTaskExecutionRole:
@@ -192,7 +206,7 @@ Resources:
       ExecutionRoleArn: !GetAtt ECSTaskExecutionRole.Arn
       ContainerDefinitions:
         - Name: app
-          Image: !Sub '${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com/${ECRRepository}:latest'
+          Image: nginx:alpine
           PortMappings:
             - ContainerPort: 80
           LogConfiguration:
@@ -226,6 +240,12 @@ Resources:
           TargetGroupArn: !Ref TargetGroup
 
 Outputs:
+  Environment:
+    Description: Environment Name
+    Value: !Ref Environment
+    Export:
+      Name: !Sub '${AWS::StackName}-Environment'
+  
   VPCId:
     Description: VPC ID
     Value: !Ref VPC
