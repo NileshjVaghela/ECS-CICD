@@ -261,87 +261,24 @@ Click **Create build project**
 
 ---
 
-## Part 5: Create IAM Role for CodePipeline
-
-### Create the Role
-1. Go to **IAM** console → **Roles**
-2. Click **Create role**
-3. **Trusted entity type:** AWS service
-4. **Use case:** CodePipeline
-5. Click **Next**
-6. Click **Next** (default policy is attached)
-7. **Role name:** `ecs-codepipeline-role`
-8. Click **Create role**
-
-### Add Inline Policy
-1. Click on `ecs-codepipeline-role`
-2. Click **Add permissions** → **Create inline policy**
-3. Click **JSON** tab
-4. Paste this policy:
-```json
-{
-  "Version": "2012-10-17",
-  "Statement": [
-    {
-      "Effect": "Allow",
-      "Action": [
-        "s3:GetObject",
-        "s3:PutObject",
-        "s3:GetBucketLocation"
-      ],
-      "Resource": [
-        "arn:aws:s3:::ecs-cicd-artifacts-*",
-        "arn:aws:s3:::ecs-cicd-artifacts-*/*"
-      ]
-    },
-    {
-      "Effect": "Allow",
-      "Action": [
-        "codebuild:BatchGetBuilds",
-        "codebuild:StartBuild"
-      ],
-      "Resource": "*"
-    },
-    {
-      "Effect": "Allow",
-      "Action": [
-        "ecs:*",
-        "iam:PassRole"
-      ],
-      "Resource": "*"
-    },
-    {
-      "Effect": "Allow",
-      "Action": [
-        "codecommit:GetBranch",
-        "codecommit:GetCommit",
-        "codecommit:UploadArchive",
-        "codecommit:GetUploadArchiveStatus",
-        "codecommit:CancelUploadArchive"
-      ],
-      "Resource": "*"
-    }
-  ]
-}
-```
-5. Click **Next**
-6. **Policy name:** `CodePipelineAdditionalPolicy`
-7. Click **Create policy**
-
----
-
-## Part 6: Create CodePipeline
+## Part 5: Create CodePipeline
 
 1. Go to **CodePipeline** console
 2. Click **Create pipeline**
 
 ### Pipeline Settings
 - **Pipeline name:** `ecs-app-pipeline`
-- **Service role:** Existing service role
+- **Service role:** New service role (CodePipeline will create it automatically)
+- **Role name:** Leave default or use `AWSCodePipelineServiceRole-us-east-1-ecs-app-pipeline`
+- **Artifact store:** Custom location
+- **Bucket:** `ecs-cicd-artifacts-<YOUR-ACCOUNT-ID>`
+- Click **Next**
 - **Role name:** `ecs-codepipeline-role`
 - **Artifact store:** Custom location
 - **Bucket:** `ecs-cicd-artifacts-<YOUR-ACCOUNT-ID>`
 - Click **Next**
+
+## Part 6: Configure Pipeline Stages
 
 ### Source Stage
 - **Source provider:** AWS CodeCommit
