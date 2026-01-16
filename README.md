@@ -2,23 +2,25 @@
 
 ## Overview
 
-This hands-on exercise teaches students how to create a complete CI/CD pipeline for Amazon ECS using AWS CodePipeline. The exercise is divided into two parts:
+This hands-on exercise teaches students how to create a complete CI/CD pipeline for Amazon ECS using AWS CodePipeline. The exercise is divided into two phases:
 
-- **Part 1:** Base ECS infrastructure (pre-deployed by instructor)
-- **Part 2:** CI/CD pipeline creation (student hands-on using AWS Console)
+- **Phase 1:** Staging environment with automated CI/CD pipeline
+- **Phase 2:** Production environment with manual approval workflow
 
 ---
 
 ## Exercise Structure
 
-### Part 1: Base Infrastructure Setup (Instructor)
+### Phase 1: Staging Environment (Instructor + Students)
 
-The instructor deploys the base ECS infrastructure using CloudFormation. This includes:
+**Instructor deploys base staging infrastructure:**
+
+The instructor deploys the staging ECS infrastructure using CloudFormation. This includes:
 
 - **VPC** with 2 public subnets across availability zones
 - **Application Load Balancer** with target group and listener
-- **ECS Fargate Cluster** for running containers
-- **ECS Service** with task definition
+- **ECS Fargate Cluster** (tagged as staging)
+- **ECS Service** with task definition (using placeholder nginx image)
 - **ECR Repository** for storing Docker images
 - **Security Groups** for ALB and ECS tasks
 - **IAM Roles** for ECS task execution
@@ -38,13 +40,9 @@ aws cloudformation create-stack \
 
 **File:** `ecs-base-infrastructure.yaml`
 
----
+**Students build CI/CD pipeline:**
 
-### Part 2: CI/CD Pipeline (Student Hands-on)
-
-Students create a complete CI/CD pipeline using the **AWS Console only**. No CloudFormation or CLI required for this part.
-
-**What Students Will Build:**
+Students create a complete CI/CD pipeline using the **AWS Console only**:
 
 1. **CodeCommit Repository** - AWS-managed Git repository for source control
 2. **S3 Artifact Bucket** - Storage for pipeline artifacts
@@ -52,18 +50,51 @@ Students create a complete CI/CD pipeline using the **AWS Console only**. No Clo
 4. **CodeBuild Project** - Builds Docker images and pushes to ECR
 5. **CodePipeline** - Orchestrates the entire CI/CD workflow
 
-**Pipeline Flow:**
+**Pipeline Flow (Phase 1):**
 ```
-CodeCommit (Source) → CodeBuild (Build Docker Image) → ECS (Deploy)
+CodeCommit (Source) → CodeBuild (Build) → Deploy to Staging
 ```
 
 **File:** `CICD-HANDSON-CONSOLE.md`
 
 ---
 
+### Phase 2: Production Environment with Manual Approval (Advanced)
+
+**Instructor deploys production infrastructure:**
+
+Deploy a second ECS cluster for production using the same template:
+
+```bash
+aws cloudformation create-stack \
+  --stack-name ecs-production \
+  --template-body file://ecs-base-infrastructure.yaml \
+  --parameters ParameterKey=Environment,ParameterValue=production \
+  --capabilities CAPABILITY_NAMED_IAM \
+  --region us-east-1
+```
+
+**Students enhance pipeline with approval:**
+
+Students extend the pipeline to include:
+- **Manual Approval Stage** - Review before production deployment
+- **SNS Notifications** - Email alerts for approvals
+- **Production Deployment** - Deploy to production after approval
+
+**Pipeline Flow (Phase 2):**
+```
+Source → Build → Deploy Staging → Manual Approval → Deploy Production
+                                        ↓
+                                  Email Notification
+```
+
+**File:** `PHASE2-PRODUCTION-DEPLOYMENT.md`
+
+---
+
 ## Learning Objectives
 
-By completing this exercise, students will learn:
+**Phase 1 - Staging Environment:**
 
 ✅ How to set up AWS CodeCommit for source control  
 ✅ How to configure CodeBuild to build Docker images  
@@ -73,6 +104,14 @@ By completing this exercise, students will learn:
 ✅ How to automate ECS deployments  
 ✅ How to use CloudWatch Events to trigger pipelines  
 ✅ How to troubleshoot CI/CD pipeline issues  
+
+**Phase 2 - Production Environment:**
+
+✅ How to deploy multi-environment infrastructure  
+✅ How to implement manual approval workflows  
+✅ How to configure SNS notifications  
+✅ How to promote code from staging to production  
+✅ How to implement production-grade CI/CD practices  
 
 ---
 
@@ -93,13 +132,16 @@ By completing this exercise, students will learn:
 
 ## Time Estimate
 
-- **Part 1 (Instructor):** 10-15 minutes (CloudFormation deployment)
-- **Part 2 (Students):** 60-90 minutes (hands-on exercise)
+- **Phase 1 (Instructor):** 10-15 minutes (CloudFormation deployment for staging)
+- **Phase 1 (Students):** 60-90 minutes (CI/CD pipeline creation)
+- **Phase 2 (Instructor):** 10-15 minutes (CloudFormation deployment for production)
+- **Phase 2 (Students):** 30-45 minutes (Add approval and production deployment)
 
 ---
 
 ## Architecture Diagram
 
+**Phase 1 - Staging Environment:**
 ```
 ┌─────────────┐
 │ CodeCommit  │
@@ -119,21 +161,45 @@ By completing this exercise, students will learn:
 │  └────┬───┘ │
 │       ↓     │
 │  ┌────────┐ │
-│  │ Deploy │ │ ← Updates ECS Service
+│  │ Deploy │ │ ← Updates ECS Staging Service
 │  └────────┘ │
 └─────────────┘
        │
        ↓
-┌─────────────┐      ┌─────────────┐
-│     ECR     │─────→│ ECS Service │
-│ (Container  │      │  (Fargate)  │
-│   Images)   │      └──────┬──────┘
-└─────────────┘             │
-                            ↓
-                   ┌─────────────────┐
-                   │ Load Balancer   │
-                   │ (Public Access) │
-                   └─────────────────┘
+┌─────────────┐      ┌──────────────────┐
+│     ECR     │─────→│ ECS Staging      │
+│ (Container  │      │ Cluster/Service  │
+│   Images)   │      └────────┬─────────┘
+└─────────────┘               │
+                              ↓
+                     ┌─────────────────┐
+                     │ Load Balancer   │
+                     │ (Staging)       │
+                     └─────────────────┘
+```
+
+**Phase 2 - Multi-Environment with Approval:**
+```
+┌─────────────┐
+│ CodeCommit  │
+└──────┬──────┘
+       │
+       ↓
+┌──────────────────────────────────────────────────────┐
+│                   CodePipeline                       │
+│                                                      │
+│  Source → Build → Deploy Staging → Manual Approval  │
+│                                          ↓           │
+│                                    Deploy Production │
+└──────────────────────────────────────────────────────┘
+       │                                      │
+       ↓                                      ↓
+┌──────────────┐                      ┌──────────────┐
+│   Staging    │                      │ Production   │
+│ ECS Cluster  │                      │ ECS Cluster  │
+│      +       │                      │      +       │
+│     ALB      │                      │     ALB      │
+└──────────────┘                      └──────────────┘
 ```
 
 ---
@@ -153,6 +219,7 @@ By completing this exercise, students will learn:
 
 ### For Instructors:
 
+**Phase 1 - Deploy Staging:**
 1. Review `ecs-base-infrastructure.yaml`
 2. Deploy the CloudFormation stack with staging environment:
    ```bash
@@ -166,15 +233,30 @@ By completing this exercise, students will learn:
 3. Share the stack outputs with students
 4. Provide students with `CICD-HANDSON-CONSOLE.md`
 
+**Phase 2 - Deploy Production (Optional):**
+1. Deploy production infrastructure:
+   ```bash
+   aws cloudformation create-stack \
+     --stack-name ecs-production \
+     --template-body file://ecs-base-infrastructure.yaml \
+     --parameters ParameterKey=Environment,ParameterValue=production \
+     --capabilities CAPABILITY_NAMED_IAM \
+     --region us-east-1
+   ```
+2. Provide students with `PHASE2-PRODUCTION-DEPLOYMENT.md`
+
 ### For Students:
 
-1. Get the base stack outputs from your instructor
+**Phase 1:**
+1. Get the staging stack outputs from your instructor
 2. Follow the instructions in `CICD-HANDSON-CONSOLE.md`
 3. Create the CI/CD pipeline using AWS Console
 4. Test the pipeline by pushing code changes
 
-**For Phase 2 (Production Deployment):**
-- Follow `PHASE2-PRODUCTION-DEPLOYMENT.md` to add production environment with manual approval
+**Phase 2 (Optional Advanced):**
+1. Follow `PHASE2-PRODUCTION-DEPLOYMENT.md` to add production environment
+2. Implement manual approval workflow
+3. Test staging-to-production promotion
 
 ---
 
@@ -207,14 +289,23 @@ EXPOSE 80
 
 ## Success Criteria
 
-Students successfully complete the exercise when:
+**Phase 1 - Staging:**
 
 ✅ CodePipeline is created with Source, Build, and Deploy stages  
 ✅ Pipeline automatically triggers on code commits  
 ✅ Docker image is built and pushed to ECR  
-✅ ECS service is updated with the new image  
-✅ Application is accessible via Load Balancer URL  
-✅ Code changes trigger automatic redeployment  
+✅ ECS staging service is updated with the new image  
+✅ Application is accessible via staging Load Balancer URL  
+✅ Code changes trigger automatic redeployment to staging  
+
+**Phase 2 - Production:**
+
+✅ Production ECS cluster is deployed  
+✅ Pipeline includes manual approval stage  
+✅ SNS email notifications are received for approvals  
+✅ Staging deployment completes before approval  
+✅ Production deployment occurs only after approval  
+✅ Both staging and production environments are accessible  
 
 ---
 
@@ -239,16 +330,33 @@ Students successfully complete the exercise when:
 
 ## Cleanup Instructions
 
-### Students:
+### Phase 1 - Students:
 1. Delete CodePipeline: `ecs-app-pipeline`
 2. Delete CodeBuild project: `ecs-app-build`
 3. Delete CodeCommit repository: `ecs-app`
 4. Empty and delete S3 bucket: `ecs-cicd-artifacts-*`
 5. Delete IAM roles: `ecs-codepipeline-role` and `ecs-codebuild-role`
 
-### Instructor:
+### Phase 1 - Instructor:
 ```bash
-aws cloudformation delete-stack --stack-name ecs-base --region us-east-1
+aws cloudformation delete-stack --stack-name ecs-staging --region us-east-1
+```
+
+### Phase 2 - Students:
+1. Delete enhanced CodePipeline: `ecs-cicd-with-approval-pipeline`
+2. Delete SNS topic subscription (check email)
+3. Delete CodeBuild project
+4. Delete CodeCommit repository
+5. Empty and delete S3 bucket
+6. Delete IAM roles
+
+### Phase 2 - Instructor:
+```bash
+# Delete production infrastructure
+aws cloudformation delete-stack --stack-name ecs-production --region us-east-1
+
+# Delete staging infrastructure
+aws cloudformation delete-stack --stack-name ecs-staging --region us-east-1
 ```
 
 ---
